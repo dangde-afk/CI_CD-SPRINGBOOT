@@ -1,0 +1,129 @@
+pipeline {
+    agent any
+
+    environment {
+        TOMCAT_USER = 'admin'
+        TOMCAT_PASS = '123456'
+        TOMCAT_URL  = 'http://localhost:8080/manager/text' // Sửa lại URL để đúng với endpoint deploy của Tomcat
+        WAR_NAME    = 'demo.war' // Khớp với finalName trong pom.xml
+        SITE_NAME   = 'MySpringApp' // Tên website IIS
+        SITE_PATH   = 'C:\\inetpub\\myspringapp' // Thư mục web gốc IIS
+        IIS_PORT    = '9090' // Port IIS
+        PUBLISH_PATH = 'C:\\Program Files\\java technical software\\apache-tomcat-10.1.43\\webapps' // Thư mục chứa WAR đã giải nén
+    }
+
+    stages {
+        stage('Clone') {
+            steps {
+                echo '🔁 Clone mã nguồn'
+                git branch: 'main', url: 'https://github.com/dangde-afk/CI_CD-SPRINGBOOT.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                echo '🔧 Cài đặt dependencies'
+                withMaven(maven: 'Maven', jdk: 'JDK17') {
+                    sh 'mvn install'
+                }
+            }
+        }
+
+        stage('Compile Project') {
+            steps {
+                echo '⚙️ Biên dịch project Spring Boot'
+                withMaven(maven: 'Maven', jdk: 'JDK17') {
+                    sh 'mvn compile'
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                echo '🧪 Chạy unit tests'
+                withMaven(maven: 'Maven', jdk: 'JDK17') {
+                    sh 'mvn test'
+                }
+            }
+        }
+
+        stage('Package WAR') {
+            steps {
+                echo '📦 Đóng gói project thành file WAR'
+                withMaven(maven: 'Maven', jdk: 'JDK17') {
+                    sh 'mvn clean package'
+                }
+            }
+        }
+
+        stage('Publish') {
+            steps {
+                echo '📂 Copy nội dung WAR sang thư mục chạy'
+                bat """
+                    if not exist "${PUBLISH_PATH}" mkdir "${PUBLISH_PATH}"
+                    powershell Expand-Archive -Path "target\\${WAR_NAME}" -DestinationPath "${PUBLISH_PATH}" -Force
+                """
+            }
+        }
+
+        stage('Deploy to IIS') {
+            steps {
+                echo '🌐 Tạo website IIS (nếu chưa có)'
+                bat """
+                    powershell -Command "Import-Module WebAdministration; \
+                        if (-Not (Test-Path IIS:\\Sites\\${SITE_NAME})) { \
+                            New-Website -Name '${SITE_NAME}' -Port ${IIS_PORT} -PhysicalPath '${PUBLISH_PATH}' -Force \
+                        }"
+                """
+            }
+        }
+
+        stage('Deploy to Tomcat') {
+            steps {
+                echo '🚀 Deploy WAR lên Tomcat'
+                sh """
+                    curl -v -u ${TOMCAT_USER}:${TOMCAT_PASS} --upload-file target/${WAR_NAME} \
+                    "${TOMCAT_URL}/deploy?path=/demo&update=true"
+                """
+            }
+        }
+
+        stage('Publish to IIS (WAR)') {
+            steps {
+                echo '📂 Copy nội dung WAR sang thư mục IIS'
+                bat """
+                    if not exist "${SITE_PATH}" mkdir "${SITE_PATH}"
+                    powershell Expand-Archive -Path "target\\${WAR_NAME}" -DestinationPath "${SITE_PATH}" -Force
+                """
+            }
+        }
+
+        stage('Create IIS Website') {
+            steps {
+                echo '🌐 Tạo website IIS chính (nếu chưa có)'
+                bat """
+                    powershell -Command "Import-Module WebAdministration; \
+                        if (-Not (Test-Path IIS:\\Sites\\${SITE_NAME})) { \
+                            New-Website -Name '${SITE_NAME}' -Port ${IIS_PORT} -PhysicalPath '${SITE_PATH}' -Force \
+                        }"
+                """
+            }
+        }
+
+        stage('Open Website') {
+            steps {
+                echo '🌍 Mở website IIS trên trình duyệt'
+                bat "start http://localhost:${IIS_PORT}"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ CI/CD hoàn tất cho Spring Boot!'
+        }
+        failure {
+            echo '❌ Có lỗi trong quá trình CI/CD.'
+        }
+    }
+}
